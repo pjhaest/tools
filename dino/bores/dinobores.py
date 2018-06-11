@@ -16,19 +16,22 @@ import xml.etree.ElementTree as ET
 import matplotlib.patches as patches
 import warnings
 
+# todo: change for the actual user!
 tools = '/Users/Theo/GRWMODELS/python/tools'
-
 if not tools in sys.path:
     sys.path.insert(1, tools)
 
 import dino.bores.dinoborecodes as dcodes
 from coords import inpoly
-import shapefile
+
+
+# import shapefile  replace import to specific module
 
 import logging
 
 logging.basicConfig(level=logging.DEBUG, format=' %(asctime)s - %(levelname)s - %(message)s')
 logging.debug('Start of '.format(__name__))
+
 
 AND = np.logical_and
 NOT = np.logical_not
@@ -148,10 +151,11 @@ class Bore:
             self.strat = dict()
             for i, lisi in enumerate(lithostratInterval):
                 self.strat[i] = {'baseDepth': float(lisi.attrib['baseDepth'])}
-                if UoM == 'CENTIMETER' : self.strat[i] /= 100.
+                if UoM == 'CENTIMETER' : self.strat[i]['baseDepth'] /= 100.
                 for child in lisi.getchildren():
                     try:
                         self.strat[i][child.tag] = child.attrib['code']
+                        self.strat[i]['text'] = child.text
                     except:
                         pass
         except:
@@ -176,15 +180,21 @@ class Bore:
 
         try:
             waterlevels = borehole.find('.//waterlevels')
-            levels = waterlevels.getchildren()
+                levels = waterlevels.getchildren()
             if levels:
                 self.initialWaterlevel = dict()
-                for level in levels:
-                    f = 'filter' + level.attrib['filter']
-                    self.initialWaterlevel[f]= {
-                        'UoM': waterlevels.attrib['UoM'],
-                        **level.attrib,
-                        'elev' : self.ztop - float(level.attrib['waterDepth'])}
+                    for level in levels:
+                        f = 'filter' + level.attrib['filter']
+                        self.initialWaterlevel[f]=\
+                         {'UoM': waterlevels.attrib['UoM'], **level.attrib,
+                            'elev' : self.ztop - 0.5 *
+                            (float(level.attrib['topDepth']) +\
+                             float(level.attrib['baseDepth']))}
+                        self.initialWaterlevel[f].pop('filter')
+                        self.initialWaterlevel[f]= {
+                            'UoM': waterlevels.attrib['UoM'],
+                            **level.attrib,
+                            'elev' : self.ztop - float(level.attrib['waterDepth'])}
         except:
             pass
 
@@ -235,10 +245,13 @@ class Bore:
         ----------
             fs :int
                 fontsize for text at drillings
+
             fw :float
                 Faction of xlim to used as width of drawn borehole.
+
             lith : bool
                 Plot lithology.
+
             admix: bool
                 Plot admixtures.
             strat : bool
@@ -320,6 +333,7 @@ class Bore:
                 zt = self.ztop - self.lith[i]['topDepth']
                 zb = self.ztop - self.lith[i]['baseDepth']
                 zm = 0.5 * (zt + zb)
+
                 try:
                     L  = self.lith[i]['lithology']
                 except:
@@ -396,6 +410,7 @@ class Bore:
                 pass
 
         if filters:
+
             try:
                 self.plotFilters(ax, x, dcol, fw, fc='blue')
             except:
@@ -403,6 +418,7 @@ class Bore:
                 pass
 
         if waterlevel:
+
             try:
                 self.plotWaterlevel(ax, x, fw, **kwargs)
             except:
@@ -500,6 +516,7 @@ class Bore:
         w     = kwargs.pop('w', 0.25)
 
         for key in self.initialWaterlevel.keys():
+
             try:
                 p = self.initialWaterlevel[key]['elev']
                 ax.plot([x - fw * w, x + fw * w], [p, p], color=color, lw = 2)
@@ -581,12 +598,14 @@ class Bores(UserDict):
         assert os.path.isdir(boredir), "Not a directory:\n{}".format(boredir)
 
         if version is None:
-            LD =[f for f in os.listdir(boredir) if f[-7:-4] == '1.4.xml']
+
+            LD =[f for f in os.listdir(boredir) if f[-7:-4] == '1.4']
             # Default xml version of TNO, use of available
             if len(LD) == 0:
                 LD =[f for f in os.listdir(boredir) if f[-4:] == '.xml']
         else:
-            ext = version + '.xlm'
+
+            ext = version
             LD =[f for f in os.listdir(boredir) if f[-7:-4] == ext]
 
         if len(LD) == 0:
@@ -724,6 +743,7 @@ class Bores(UserDict):
         keys = order if order is not None else self.keys()
 
 
+
         Xp   = np.array([self[k].x for k in keys])
         Yp   = np.array([self[k].y for k in keys])
         top  = np.max(np.array([self[k].ztop for k in keys]))
@@ -767,6 +787,7 @@ class Bores(UserDict):
         ax.set_title(kwargs.pop('title', 'Test drawing a set of boreholes'))
         ax.set_xlabel(kwargs.pop('xlabel', 'x [m]'))
         ax.set_ylabel(kwargs.pop('ylabel', 'm +NAP'))
+
         ax.set_xlim(xlim)
         ax.set_ylim(kwargs.pop('ylim', (base - dz, top + dz)))
         ax.grid(axis='y', linewidth=0.5)
@@ -774,6 +795,7 @@ class Bores(UserDict):
         for i, k in enumerate(keys):
             if not np.isnan(s[i]):
                 print('bore {}, name={}, s={:.0} m'.format(i,self[k].name, s[i]))
+
                 self[k].plot(x=s[i], ax=ax, fw=fw, fs=fs,                          
                           verbose=verbose, **kwargs)
 
@@ -805,6 +827,7 @@ class Bores(UserDict):
         '''Generates shapefile of bore locations with record [name, ztop, zbot].
         '''
 
+        import shapefile
         wr = shapefile.Writer(shapeType=shapefile.POINT)
         wr.field('name', fieldType='C', size='20')
         wr.field('ztop', fieldType='N', size='20', decimal=3)
