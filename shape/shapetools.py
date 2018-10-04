@@ -55,7 +55,7 @@ def ticks(xmin, xmax, dx):
 
 def fldnames(path):
     ''''Return fieldnames in shapefile.
-    
+
     parameters
     ----------
     path : str
@@ -63,7 +63,7 @@ def fldnames(path):
 
     TO 180521
     '''
-    
+
     try:
         rdr = shapefile.Reader(path)
     except FileNotFoundError:
@@ -73,7 +73,7 @@ def fldnames(path):
 
 def shapes2dict(path, key=None):
     '''Return contents of shapefile as dict.
-    
+
     parameters
     ---------
     path : str
@@ -85,7 +85,7 @@ def shapes2dict(path, key=None):
     -------
     dict with one of the keys = 'points' which contains the shape
         coordinates of the record.
-        
+
     TO 180521
     '''
 
@@ -93,18 +93,18 @@ def shapes2dict(path, key=None):
         rdr = shapefile.Reader(path)
     except FileNotFoundError:
         raise "Can't find <{}>".format(path)
-        
+
     fld = [f[0] for f in rdr.fields[1:]]
-    
+
     if key is None:
         idx = 0
     else:
         try:
             idx = fld.index(key)
         except:
-            raise "key <{}>  not in fields of shape".format(key)
-            
-        
+            raise LookupError("key <{}>  not in fields of shape".format(key))
+
+
     shpdict={} # generate a dict with the borehole properties
     for shp, rec in zip(rdr.shapes(), rdr.records()):
         key = rec[idx]
@@ -115,86 +115,117 @@ def shapes2dict(path, key=None):
         shpdict[key].update({'points': np.array(shp.points)})
 
     return shpdict
-              
+
 
 
 def dict2shp(mydict, fileName, shapetype=None, xy=('x', 'y'),
              usecols=None, verbose=False):
     '''Save dict to shapefile.
-    
+
     parameters
     ----------
-        mydict : a dict
-            Dictonary containing fields and coordinates
+        mydict : a dict of dicts or a list of dicts like
+            {'paris': {'pop': 10, 'area': 120, 'x': [0.1, 0.3, ...]], 'y': [0.4, -0.2, ...]},
+            'london': {'pop': 8.2, 'area': 150, 'x' ...},
+            }
+            The keys in mydict will be the names the individual shapes.
+            THe keys in the subdict will be field names in the records
+            and the x an dy fields as indicated in the xy keyword argument their coordinates.
+            These coordinates must by arrays'
+
+            Note: the key sof mydict will be use as extra field 'name' in the shape records.
+
         fileName: str
             Name of shapefile without extension
-        shapetype: 'POINT' or 'POINTZ'
+        shapetype: any legal type name e.g. 'POINT', 'POINTZ', 'POLYLINE', ...
             Type of shapefile.
-            If None, then 'POINT' is used when len xy==2 and 'POINTZ' if
-            len xy == 3
-        xy: tuple of 2 or 3 str
-            dict keys denoting x, y (and z) coordinates
+            If None, then 'POINT' is used when len(xy)==2 and 'POINTZ' if
+            len(xy)==3.
+        xy: tuple of 2 or 3 str e.g. xy=('x', 'y' [, 'z'])
+            dict keys denoting x, y (and z) coordinates.
         usecols: list of str
             list of str naming the keys to be used in the shapefile
     returns
     -------
-        None, shapefile is saved
+        None, shapefile is saved to fname
     '''
+
+    #is mydict a lst of dicts or a dict of dicts?
+    assert isinstance(mydict, dict), "first arugment must be a dictionary whose keys are shape names."
+
+    if  isinstance(mydict[list(mydict.keys())[0]], (tuple, list)):
+        # then turn it into a dict of dict with key =__noname__
+        old_dict = mydict
+        mydict={}
+        mydict['noname'] = old_dict
+
+    shape_names = list(mydict.keys())
+
     if usecols is None:
         usecols = []
-    
+
     if shapetype is None:
         if len(xy) == 2:
             shapetype = 'POINT'
         elif len(xy) == 3:
             shapetype = 'POINTZ'
         else:
-            raise ValueError("xy must containt 2 or 3 strings")
+            raise ValueError(
+                "xy must containt 2 or 3 fieldnames containing x, y (and z) shape coordinates")
 
     shapetype = shapetype.upper()
-    
+
     legal_types = [k for k in shapefile.__dict__ if k[:2] in ['PO', 'MU']]
-    if not shapetype in legal_types:
-        raise TypeError("shapetype must be `POINT` or `POINTZ`")
-        
+
+    assert shapetype in legal_types, '''
+        Shapetype must be `POINT, POINTZ, 'POLYLINE, MULTIPOINT etc acceptable by shapes.
+        '''
+
     wr = shapefile.Writer(eval('shapefile.' + shapetype))
-    
-    keys = []
-    for k in mydict:
-        if not k in xy:
-            if not usecols or k in usecols:
-                try:
-                    wr.field(str(k), *dbasefield[str(type(mydict[k]))])
-                    keys.append(k)
-                except:
-                    logger.debug("Can't handle field <{}>".format(str(k)))
+
+    # generate shapefile fields
+    wr.field('name', 'C', 20)   # firrst field will be the name of the shape record
+
+    # add the other fields
+    keys = usecols if usecols else [
+                        k for k in mydict[list(mydict.keys())[0]] if not k in xy]
+
+    for k in keys: # fields of sub dict
+        try:
+            wr.field(str(k), *dbasefield[str(type(k))])
+        except:
+            logger.debug("Can't handle field <{}>".format(str(k)))
 
     if verbose:
         print(', '.join(keys))
 
+    # generate records and points (or parts of polyline)
+    for shape_name in shape_names:
+        rec = mydict[shape_name]
+        wr.record(shape_name, *[rec[k] for k in keys]) # includes name
 
-    if len(keys) == 0:
-        print('Valid keys are:\n' + ', '.join([str(k) for k in dbasefield]))
-        raise TypeError('No valid keys found in dictonary.')
-    
-    wr.record(*[mydict[k] for k in keys])
-    
-    if shapetype.startswith('POLY'):
-        wr.line(parts=[[(x_, y_) 
-            for x_, y_ in zip(mydict[xy[0]], mydict[xy[1]])]])
-    else:
-        wr.point(*[mydict[k] for k in xy])
-    
+        if shapetype.startswith('POLY'):
+            if shapetype.startswith('POLYG'): # close polyline if necessary
+                if np.any(rec[xy][0] != rec[xy][-1]):
+                    rec[xy] = np.vstack((rec[xy], rec[xy][:1]))
+                wr.poly(parts=[[(x_, y_)
+                    for x_, y_ in zip(rec[xy][0], rec[xy][1])]])
+            else:
+                wr.line(parts=[[(x_, y_)
+                    for x_, y_ in zip(rec[xy[0]], rec[xy[1]])]])
+        else:
+            wr.point(*[rec[k] for k in xy])
+
     wr.save(fileName)
     if verbose:
-        print('Dict saved to shapefile <{}>'.format(fileName))
+        logger.debug('Dict saved to shapefile <{}>'.format(fileName))
 
     return
 
 def frm2shp(myfrm, fileName, shapetype=None, xy=('x', 'y'),
             usecols=None, verbose=False):
     '''Save pd.Dataframe to shapefile.
-    
+
     parameters
     ----------
         myfrm : a pandas.DataFrame
@@ -216,7 +247,7 @@ def frm2shp(myfrm, fileName, shapetype=None, xy=('x', 'y'),
     '''
     if usecols is None:
         usecols = []
-        
+
     if shapetype is None:
         if len(xy) == 2:
             shapetype = 'POINT'
@@ -224,14 +255,14 @@ def frm2shp(myfrm, fileName, shapetype=None, xy=('x', 'y'),
             shapetype = 'POINTZ'
         else:
             raise ValueError("xy must containt 2 or 3 strings")
-        
+
     legal_types = [k for k in shapefile.__dict__ if k[:2] in ['PO', 'MU']]
-    
+
     if not shapetype.upper() in legal_types:
             raise TypeError("shapetype must be 'POINT' or 'POINTZ'")
-        
+
     wr = shapefile.Writer(eval('shapefile.' + shapetype.upper()))
-    
+
     keys = []
 
     if verbose:
@@ -256,7 +287,7 @@ def frm2shp(myfrm, fileName, shapetype=None, xy=('x', 'y'),
         wr.record(**rec)
         coords = tuple(myfrm.iloc[i][[k for k in xy]].values)
         wr.point( *coords)
-    
+
     wr.save(fileName)
 
     if verbose:
@@ -419,7 +450,7 @@ def inpoly(x, y, pgcoords):
     return pgon.contains_points(xy).reshape(shape)
 
 if __name__ == '__main__':
-    
+
     GIS       = '/Users/Theo/GRWMODELS/python/Juka_model/GIS/shapes/' # change
     shpnm = 'steilrandstukken.shp'
     shpnm = 'Steilrand.shp'
@@ -428,13 +459,13 @@ if __name__ == '__main__':
     #demebores = shapes2dict(os.path.join(GIS, 'demebores.shp'), key='Hole_ID')
 
     #%% using dict2shp and frm2shp
-    
+
     mydict = {'Hello': 'hello', 'length': 3,
               'width': 4.2, 'x' : 180320., 'y': 337231., 'z': 23.3}
 
     dict2shp(mydict, 'shapefromdict', xy=('x', 'y'), verbose=True)
 
-        
+
     dataPath = '/Users/Theo/GRWMODELS/python/Juka_model/data'
     excelFile ='Boorgatgegevens.xlsx'
     #os.path.isfile(os.path.join(dataPath, excelFile))
@@ -449,7 +480,7 @@ if __name__ == '__main__':
 
     frm2shp(boreholes, 'shapefromframe', xy=('Easting', 'Northing', 'Elevation'),
             shapetype='POINTZ', usecols=[], verbose=True)
-    
+
     import fdm
     x = np.logspace(-1, 3, 30)
     y = x[:]

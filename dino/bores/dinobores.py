@@ -16,22 +16,26 @@ import xml.etree.ElementTree as ET
 import matplotlib.patches as patches
 import warnings
 
-# todo: change for the actual user!
 tools = '/Users/Theo/GRWMODELS/python/tools'
+
 if not tools in sys.path:
     sys.path.insert(1, tools)
 
 import dino.bores.dinoborecodes as dcodes
 from coords import inpoly
+import shapefile
 
-
-# import shapefile  replace import to specific module
+#%% Logging
 
 import logging
 
 logging.basicConfig(level=logging.DEBUG, format=' %(asctime)s - %(levelname)s - %(message)s')
-logging.debug('Start of '.format(__name__))
+logger = logging.getLogger('__name__')
 
+logger.info('Start of '.format(__name__))
+
+
+#%% Shorthands
 
 AND = np.logical_and
 NOT = np.logical_not
@@ -67,17 +71,23 @@ class Bore:
     def __init__(self, xmlfile=None, verbose=True):
         '''Returns a bore that was read and parsed from dinoloket xml file
 
-        Args:
-            xmlfile (str):
-                coplete path to xmlfile
+        parameters
+        ----------
+        xmlfile (str):
+            path to xmlfile
         '''
 
         if verbose:
-            print(xmlfile)
+            print(os.path.split(xmlfile)[1])
 
-        self.name = os.path.basename(xmlfile).split('_')[0]
-
-        tree = ET.parse(xmlfile)
+        self.fname = os.path.basename(xmlfile).split('_')[0]
+        self.name = os.path.splitext(self.fname)[0].split('_')[0]
+        
+        try:
+            tree = ET.parse(xmlfile)
+        except Exception as err:
+            print('ParseError in:\n{}\n{}'.format(*os.path.split(xmlfile)))
+            raise err
 
         pointSurvey    = tree.find('.//pointSurvey')
         surveyLocation = pointSurvey.find('.//surveyLocation')
@@ -151,11 +161,10 @@ class Bore:
             self.strat = dict()
             for i, lisi in enumerate(lithostratInterval):
                 self.strat[i] = {'baseDepth': float(lisi.attrib['baseDepth'])}
-                if UoM == 'CENTIMETER' : self.strat[i]['baseDepth'] /= 100.
+                if UoM == 'CENTIMETER' : self.strat[i] /= 100.
                 for child in lisi.getchildren():
                     try:
                         self.strat[i][child.tag] = child.attrib['code']
-                        self.strat[i]['text'] = child.text
                     except:
                         pass
         except:
@@ -180,21 +189,15 @@ class Bore:
 
         try:
             waterlevels = borehole.find('.//waterlevels')
-                levels = waterlevels.getchildren()
+            levels = waterlevels.getchildren()
             if levels:
                 self.initialWaterlevel = dict()
-                    for level in levels:
-                        f = 'filter' + level.attrib['filter']
-                        self.initialWaterlevel[f]=\
-                         {'UoM': waterlevels.attrib['UoM'], **level.attrib,
-                            'elev' : self.ztop - 0.5 *
-                            (float(level.attrib['topDepth']) +\
-                             float(level.attrib['baseDepth']))}
-                        self.initialWaterlevel[f].pop('filter')
-                        self.initialWaterlevel[f]= {
-                            'UoM': waterlevels.attrib['UoM'],
-                            **level.attrib,
-                            'elev' : self.ztop - float(level.attrib['waterDepth'])}
+                for level in levels:
+                    f = 'filter' + level.attrib['filter']
+                    self.initialWaterlevel[f]= {
+                        'UoM': waterlevels.attrib['UoM'],
+                        **level.attrib,
+                        'elev' : self.ztop - float(level.attrib['waterDepth'])}
         except:
             pass
 
@@ -245,13 +248,10 @@ class Bore:
         ----------
             fs :int
                 fontsize for text at drillings
-
             fw :float
                 Faction of xlim to used as width of drawn borehole.
-
             lith : bool
                 Plot lithology.
-
             admix: bool
                 Plot admixtures.
             strat : bool
@@ -333,7 +333,6 @@ class Bore:
                 zt = self.ztop - self.lith[i]['topDepth']
                 zb = self.ztop - self.lith[i]['baseDepth']
                 zm = 0.5 * (zt + zb)
-
                 try:
                     L  = self.lith[i]['lithology']
                 except:
@@ -410,7 +409,6 @@ class Bore:
                 pass
 
         if filters:
-
             try:
                 self.plotFilters(ax, x, dcol, fw, fc='blue')
             except:
@@ -418,7 +416,6 @@ class Bore:
                 pass
 
         if waterlevel:
-
             try:
                 self.plotWaterlevel(ax, x, fw, **kwargs)
             except:
@@ -516,7 +513,6 @@ class Bore:
         w     = kwargs.pop('w', 0.25)
 
         for key in self.initialWaterlevel.keys():
-
             try:
                 p = self.initialWaterlevel[key]['elev']
                 ax.plot([x - fw * w, x + fw * w], [p, p], color=color, lw = 2)
@@ -571,18 +567,19 @@ class Bores(UserDict):
         returns a subset of bores
 
     '''
-    def __init__(self, boredir=None, **kwargs):
+    def __init__(self, boredir=None, walk=True, ext='.xml',
+                 n=100000, verbose=True, **kwargs):
         '''Return descriptions of boreholes from dinoloket given in xml files.
 
-        Args:
-            boredir (str):
-                path to folder where the xml files are
-        Kwargs:
-            version (str | [None]):
-                version string used in xml file name ('1.3 or 1.4')
-            n (int | [None]):
-                maximum number of files to read
-            verbose ([False] | True):
+        parameters
+        ----------
+        boredir (str):
+            path to folder where the xml files are
+        ext : (str | [None]):
+            extension e.g.  ('.xml'), '1.3.xlml', '_1.4.xml
+        n (int | [None]):
+                maximum number of files to read (default 100000)
+        verbose: bool (default True)
                 yields more info during processing
         '''
 
@@ -591,60 +588,43 @@ class Bores(UserDict):
         if boredir is None:
             return
 
-        version = kwargs.pop('version', None)
-        verbose = kwargs.pop('verbose', False)
-        n       = kwargs.pop('n'      , None)
-
         assert os.path.isdir(boredir), "Not a directory:\n{}".format(boredir)
-
-        if version is None:
-
-            LD =[f for f in os.listdir(boredir) if f[-7:-4] == '1.4']
-            # Default xml version of TNO, use of available
-            if len(LD) == 0:
-                LD =[f for f in os.listdir(boredir) if f[-4:] == '.xml']
-        else:
-
-            ext = version
-            LD =[f for f in os.listdir(boredir) if f[-7:-4] == ext]
-
-        if len(LD) == 0:
-            raise FileNotFoundError(
-                    "No files found with version = {} in directory\n{}"
-                    .format(version, boredir))
-
-        if n is None:
-            n = len(LD)
-        else:
-            n = min(abs(int(n)), len(LD))
-
-        for i, file in enumerate(LD[:n]):
-            if verbose:
-                print(file)
-            else:
-                if np.remainder(i + 1, 50) == 0:
-                    print('.', end='')
-                if np.remainder(i + 1, 500) == 0:
-                    print(i)
-            bore = Bore(os.path.join(boredir, file))
-            if not np.isnan(bore.ztop):
-                self.data[bore.name]= bore
-            else:
-                print('\n', file, " has no elevation.")
+        
+        # walk through all directories collecting the unique boreholes
+        borenames = [] # the unique borehole file names
+        count = 0
+        for curpath, _, files in os.walk(boredir):
+            for borename in files:                
+                if borename.endswith(ext) and not borename in borenames:
+                    bore = Bore(os.path.join(curpath, borename), verbose=verbose)
+                    if not np.isnan(bore.ztop):
+                        self.data[bore.name]= bore
+                        borenames.append(borename)
+                        count += 1
+                        if count %  50 == 0: print('.', end='')
+                        if count % 500 == 0: print(count)
+                    else:
+                        logger.info('\n', borename, " has no elevation. Skipped")                    
+                if count == n: break
+            if count == n :   break
+            if walk == False: break
+        logger.info('{} bores read'.format(len(self.data)))
 
 
-        def keys(self):
-            return self.data.keys()
+    def keys(self):
+        return self.data.keys()
 
-        def __getitem__(self, key):
-            return self.data[key]
+    def __getitem__(self, key):
+        return self.data[key]
 
-        def __setitem__(self, key, value):
-            self.data[key] = value
+    def __setitem__(self, key, value):
+        self.data[key] = value
 
-        def __iter__(self):
-            return self.data.__iter()
+    def __iter__(self):
+        return self.data.__iter()
 
+    def __len__(self):
+        return len(self.data)
 
     def select(self, polygon):
         '''Return a subset of Bores lying inside the polygon.
@@ -743,7 +723,6 @@ class Bores(UserDict):
         keys = order if order is not None else self.keys()
 
 
-
         Xp   = np.array([self[k].x for k in keys])
         Yp   = np.array([self[k].y for k in keys])
         top  = np.max(np.array([self[k].ztop for k in keys]))
@@ -787,7 +766,6 @@ class Bores(UserDict):
         ax.set_title(kwargs.pop('title', 'Test drawing a set of boreholes'))
         ax.set_xlabel(kwargs.pop('xlabel', 'x [m]'))
         ax.set_ylabel(kwargs.pop('ylabel', 'm +NAP'))
-
         ax.set_xlim(xlim)
         ax.set_ylim(kwargs.pop('ylim', (base - dz, top + dz)))
         ax.grid(axis='y', linewidth=0.5)
@@ -795,7 +773,6 @@ class Bores(UserDict):
         for i, k in enumerate(keys):
             if not np.isnan(s[i]):
                 print('bore {}, name={}, s={:.0} m'.format(i,self[k].name, s[i]))
-
                 self[k].plot(x=s[i], ax=ax, fw=fw, fs=fs,                          
                           verbose=verbose, **kwargs)
 
@@ -827,7 +804,6 @@ class Bores(UserDict):
         '''Generates shapefile of bore locations with record [name, ztop, zbot].
         '''
 
-        import shapefile
         wr = shapefile.Writer(shapeType=shapefile.POINT)
         wr.field('name', fieldType='C', size='20')
         wr.field('ztop', fieldType='N', size='20', decimal=3)
@@ -1207,7 +1183,7 @@ if __name__ == '__main__':
     bores.toshape(shapename, verbose=True)
     '''
 
-    borepath = '/Users/Theo/GRWMODELS/python/DEME-juliana/bores/agtdeme'
+    borepath = '/Users/Theo/GRWMODELS/python/2017_DEME-juliana/bores/agtdeme'
 
     agtbores = Bores(borepath)
 
@@ -1217,7 +1193,6 @@ if __name__ == '__main__':
         Y = [y[0] for y in Y if y[1] >= yS and y[1] <= yN]
         return Y
 
-    north2south = [y[0] for y in Y ]
 
     testset = ['PB-GRA-5.xml', 'PB-GRA-1.xml', 'PB-GRA-4.xml', 'PB-GRA-2.xml',
          'PB-U-099.xml'] #, 'PB-GRA-3.xml', 'PB-U-060.xml', 'PB-U-031.xml',
@@ -1227,7 +1202,7 @@ if __name__ == '__main__':
 
     line = [(180000, 338360), (185000, 332640)] # Heerlerheide
     line = [(182832, 336309), (183090, 336204)] # through PB-U-203 loorecht Juka
-    if True:
+    if False:
         yN = 336700
         yS = 335700
         order = northsouth(yN, yS)
